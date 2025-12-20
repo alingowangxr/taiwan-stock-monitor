@@ -7,20 +7,11 @@ from pathlib import Path
 from tqdm import tqdm
 import matplotlib
 
-# 強制使用 Agg 後端以在雲端伺服器運行
 matplotlib.use('Agg')
 
-# 設定字型：解決 GitHub Actions 中文亂碼問題
-plt.rcParams['font.sans-serif'] = [
-    'Noto Sans CJK TC', 
-    'Noto Sans CJK JP', 
-    'Microsoft JhengHei', 
-    'Arial Unicode MS', 
-    'sans-serif'
-]
+plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans CJK JP', 'Microsoft JhengHei', 'Arial Unicode MS', 'sans-serif']
 plt.rcParams['axes.unicode_minus'] = False
 
-# 分箱參數設定：固定為 -100 到 100
 BIN_SIZE = 10.0
 X_MIN, X_MAX = -100, 100
 BINS = np.arange(X_MIN, X_MAX + 1, BIN_SIZE)
@@ -40,15 +31,16 @@ def build_company_list(arr_pct, codes, names, bins):
         if cnt == 0: continue
         
         picked_indices = np.where(mask)[0]
-        links = [f'<a href="https://www.wantgoo.com/stock/{codes[idx]}/technical-chart" style="text-decoration:none; color:#0366d6;">{codes[idx]}({names[idx]})</a>' for idx in picked_indices]
+        links = [f'<a href="https://www.wantgoo.com/stock/{codes[i]}/technical-chart" style="text-decoration:none; color:#0366d6;">{codes[i]}({names[i]})</a>' for i in picked_indices]
         lines.append(f"{lab:<12} | {cnt:>4} ({(cnt/total*100):5.1f}%) | {', '.join(links)}")
 
-    # ✅ 特別處理：所有大於等於 100% 的標的統一歸類
+    # ✅ 修正：大於等於 100% 的標的統一歸類
     extreme_mask = (arr_pct >= 100)
     e_cnt = int(extreme_mask.sum())
     if e_cnt > 0:
         e_picked = np.where(extreme_mask)[0]
-        e_links = [f'<a href="https://www.wantgoo.com/stock/{codes[idx]}/technical-chart" style="text-decoration:none; color:#0366d6;">{codes[idx]}({names[idx]})</a>' for e_picked_idx in e_picked]
+        # 這裡修正了 e_picked_idx 的引用問題
+        e_links = [f'<a href="https://www.wantgoo.com/stock/{codes[p_idx]}/technical-chart" style="text-decoration:none; color:#0366d6;">{codes[p_idx]}({names[p_idx]})</a>' for p_idx in e_picked]
         lines.append(f"{' > 100%':<12} | {e_cnt:>4} ({(e_cnt/total*100):5.1f}%) | {', '.join(e_links)}")
 
     return "\n".join(lines)
@@ -93,11 +85,9 @@ def run_global_analysis(market_id="tw-share"):
             data = df_res[col].dropna()
             
             fig, ax = plt.subplots(figsize=(11, 7))
-            # 繪圖時也將數據限制在 -100 到 100 之間，確保最後一根柱子代表「100% 以上」
             counts, edges = np.histogram(np.clip(data.values, X_MIN, X_MAX), bins=BINS)
             bars = ax.bar(edges[:-1], counts, width=9, align='edge', color=color_map[t_n], alpha=0.7, edgecolor='white')
             
-            # 加上數據標籤
             max_h = counts.max() if len(counts) > 0 else 1
             for bar in bars:
                 h = bar.get_height()
@@ -105,7 +95,7 @@ def run_global_analysis(market_id="tw-share"):
                     ax.text(bar.get_x() + 4.5, h + (max_h * 0.01), f'{int(h)}\n({h/len(data)*100:.1f}%)', 
                             ha='center', va='bottom', fontsize=9, fontweight='bold')
 
-            ax.set_ylim(0, max_h * 1.3) 
+            ax.set_ylim(0, max_h * 1.35) 
             ax.set_title(f"{p_z}K {t_z} 報酬分布 (家數:{len(data)})", fontsize=18, fontweight='bold')
             ax.set_xticks(BINS)
             ax.set_xticklabels([f"{int(x)}%" for x in BINS], rotation=45)
