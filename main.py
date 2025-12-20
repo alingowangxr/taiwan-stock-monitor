@@ -17,12 +17,12 @@ def run_market_pipeline(market_id, market_name, emoji):
     try:
         if market_id == "tw-share":
             downloader_tw.main()
-        # 已移除 jp-share 的呼叫
     except Exception as e:
         print(f"❌ 下載過程出錯: {e}")
 
     print(f"\n【Step 2: 執行 {market_name} 數據分析 & 繪圖】")
     try:
+        # 取得分析結果：圖片清單、數據表、文字報表
         img_paths, report_df, text_reports = analyzer.run_global_analysis(market_id=market_id)
         
         if report_df.empty:
@@ -30,18 +30,14 @@ def run_market_pipeline(market_id, market_name, emoji):
             return
 
         print(f"\n【Step 3: 寄送 {market_name} 專業報表】")
-        success = notifier.send_stock_report_via_resend(
-            image_data=img_paths,
+        # ✅ 修正點：對接 notifier.py 的正確函式名稱與參數
+        notifier.send_stock_report(
+            market_name=market_name,
+            img_data=img_paths,
             report_df=report_df,
-            text_reports=text_reports,
-            market_id=market_id,
-            market_name=market_name
+            text_reports=text_reports
         )
-        
-        if success:
-            print(f"✅ {emoji} {market_name} 報表寄送成功！")
-        else:
-            print(f"❌ {market_name} 報表寄送失敗。")
+        # 註：因為 notifier.py 內部已有錯誤處理並會列印結果，這裡簡化呼叫即可
 
     except Exception as e:
         print(f"❌ 分析或寄信過程出錯: {e}")
@@ -59,9 +55,6 @@ def main():
 
     for m in markets:
         run_market_pipeline(m["id"], m["name"], m["emoji"])
-        # 移除等待，因為現在只有一個市場
-        # print(f"\n☕ 等待 10 秒後處理下一個市場...")
-        # time.sleep(10)
 
     end_time = time.time()
     total_duration = (end_time - start_time) / 60
