@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       market_choice:
-        description: '選擇市場 (Select Market)'
+        description: 'Select Market'
         required: true
         default: 'all'
         type: choice
@@ -33,17 +33,12 @@ jobs:
           - { id: "cn-share", name: "China",  emoji: "🇨🇳" }
           - { id: "jp-share", name: "Japan",  emoji: "🇯🇵" }
           - { id: "kr-share", name: "Korea",  emoji: "🇰🇷" }
-    
-    # 這裡的縮排必須與 runs-on 對齊
-    if: |
-      github.event_name == 'schedule' || 
-      github.event.inputs.market_choice == 'all' || 
-      github.event.inputs.market_choice == matrix.market.id
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
