@@ -82,7 +82,6 @@ A fully automated Taiwan stock market monitoring system that performs multi-thre
 ![googlesheet1](image/1.png)
 
 
-
 ![googlesheet1](image/2.png)
 
 
@@ -100,6 +99,7 @@ A fully automated Taiwan stock market monitoring system that performs multi-thre
 
 
 ![googlesheet1](image/7.png)
+
 
 ![googlesheet1](image/8.png)
 
