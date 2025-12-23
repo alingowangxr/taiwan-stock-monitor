@@ -23,6 +23,13 @@ jobs:
   global-market-analysis:
     name: ${{ matrix.market.emoji }} ${{ matrix.market.name }} Analysis
     runs-on: ubuntu-latest
+    
+    # 💡 核心修正：判斷是否為定時排程執行，或是手動選擇該市場/選擇 all
+    if: |
+      github.event_name == 'schedule' || 
+      github.event.inputs.market_choice == 'all' || 
+      github.event.inputs.market_choice == matrix.market.id
+      
     strategy:
       fail-fast: false
       matrix:
@@ -42,6 +49,17 @@ jobs:
         with:
           python-version: '3.10'
           cache: 'pip'
+
+      # 💡 核心新增：快取 K 線資料夾與清單，這是維持 jp/cn 下載成功率的關鍵
+      - name: Cache Stock Data
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/${{ matrix.market.id }}/dayK
+            data/${{ matrix.market.id }}/lists
+          key: ${{ runner.os }}-stock-${{ matrix.market.id }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-stock-${{ matrix.market.id }}-
 
       - name: Environment Setup
         run: |
