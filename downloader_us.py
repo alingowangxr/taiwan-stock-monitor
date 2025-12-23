@@ -2,7 +2,7 @@
 import os, time, random, requests, json
 import pandas as pd
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import StringIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
@@ -16,10 +16,14 @@ DATA_DIR = os.path.join(BASE_DIR, "data", MARKET_CODE, DATA_SUBDIR)
 LIST_DIR = os.path.join(BASE_DIR, "data", MARKET_CODE, "lists")
 CACHE_LIST_PATH = os.path.join(LIST_DIR, "us_stock_list_cache.json")
 
-# ✅ 效能優化：5 個執行緒對美股而言是較穩定的選擇
+# 效能優化：5 個執行緒
 MAX_WORKERS = 5 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LIST_DIR, exist_ok=True)
+
+# 💡 定義數據過期時間 (例如 3600 秒 = 1 小時)
+# 這樣盤中執行時，若檔案超過一小時就會強制更新
+DATA_EXPIRY_SECONDS = 3600 
 
 def log(msg: str):
     print(f"{pd.Timestamp.now():%H:%M:%S}: {msg}")
@@ -32,10 +36,8 @@ def classify_security(name: str, is_etf: bool) -> str:
     return "Common Stock"
 
 def get_full_stock_list():
-    """獲取美股清單，增加 3000 檔防呆門檻"""
+    """獲取美股清單，具備今日快取門檻"""
     threshold = 3000
-    
-    # 1. 檢查今日快取
     if os.path.exists(CACHE_LIST_PATH):
         try:
             file_mtime = os.path.getmtime(CACHE_LIST_PATH)
@@ -49,18 +51,15 @@ def get_full_stock_list():
 
     log("📡 開始從官網獲取美股普通股清單...")
     all_rows = []
-
     for site in ["nasdaqlisted.txt", "otherlisted.txt"]:
         try:
             url = f"https://www.nasdaqtrader.com/dynamic/symdir/{site}"
             r = requests.get(url, timeout=15)
             df = pd.read_csv(StringIO(r.text), sep="|")
             df = df[df["Test Issue"] == "N"]
-            
             sym_col = "Symbol" if site == "nasdaqlisted.txt" else "NASDAQ Symbol"
             df["Category"] = df.apply(lambda row: classify_security(row["Security Name"], row["ETF"] == "Y"), axis=1)
             valid_df = df[df["Category"] == "Common Stock"]
-            
             for _, row in valid_df.iterrows():
                 ticker = str(row[sym_col]).strip().replace('$', '-')
                 name = str(row['Security Name']).strip()
@@ -70,31 +69,29 @@ def get_full_stock_list():
             log(f"⚠️ {site} 獲取失敗: {e}")
 
     final_list = list(set(all_rows))
-    
     if len(final_list) >= threshold:
         with open(CACHE_LIST_PATH, "w", encoding="utf-8") as f:
             json.dump(final_list, f, ensure_ascii=False)
         log(f"✅ 美股清單更新完成，共 {len(final_list)} 檔。")
         return final_list
-    elif os.path.exists(CACHE_LIST_PATH):
-        log("⚠️ 獲取數量不足，使用歷史快取備援...")
-        with open(CACHE_LIST_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    
     return final_list
 
 def download_stock_data(item):
-    """單檔下載：具備隨機亂數與重試機制"""
+    """單檔下載：具備時間檢查機制以利盤中更新"""
     yf_tkr = "Unknown"
     try:
         yf_tkr, name = item.split('&', 1)
         safe_name = "".join([c for c in name if c.isalnum() or c in (' ', '_', '-')]).strip()
         out_path = os.path.join(DATA_DIR, f"{yf_tkr}_{safe_name}.csv")
         
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
-            return {"status": "exists", "tkr": yf_tkr}
+        # 💡 關鍵修改：檢查檔案是否「存在」且「夠新」
+        if os.path.exists(out_path):
+            file_age = time.time() - os.path.getmtime(out_path)
+            # 如果檔案小於 1 小時，且檔案大小正常，則視為有效數據，不重複下載
+            if file_age < DATA_EXPIRY_SECONDS and os.path.getsize(out_path) > 1000:
+                return {"status": "exists", "tkr": yf_tkr}
 
-        # 🚀 下載前隨機等待，分散 GitHub Action 出口 IP 壓力
+        # 若檔案過期或不存在，執行下載
         time.sleep(random.uniform(0.4, 1.2))
         tk = yf.Ticker(yf_tkr)
         
@@ -111,9 +108,7 @@ def download_stock_data(item):
             except Exception as e:
                 if "Rate limited" in str(e):
                     time.sleep(random.uniform(20, 40))
-            
             time.sleep(random.uniform(2, 4))
-
         return {"status": "empty", "tkr": yf_tkr}
     except:
         return {"status": "error"}
@@ -137,7 +132,6 @@ def main():
             pbar.update(1)
         pbar.close()
     
-    # --- 💡 數據下載統計 (供 Email 通知使用) ---
     total_expected = len(items)
     effective_success = stats['success'] + stats['exists']
     fail_count = stats['error'] + stats['empty']
@@ -150,14 +144,12 @@ def main():
 
     duration = (time.time() - start_time) / 60
     log("="*30)
-    log(f"🏁 美股下載任務完成 (耗時 {duration:.1f} 分鐘)")
-    log(f"   - 總計標的: {total_expected}")
-    log(f"   - 下載成功: {effective_success}")
-    log(f"   - 失敗/缺失: {fail_count}")
-    log(f"📈 數據完整度: {(effective_success/total_expected)*100:.2f}%")
+    log(f"🏁 美股下載完成 (耗時 {duration:.1f} 分鐘)")
+    log(f"   - 下載成功(含舊檔): {effective_success}")
+    log(f"   - 數據完整度: {(effective_success/total_expected)*100:.2f}%")
     log("="*30)
     
-    return download_stats # 🚀 回傳統計字典供主程式使用
+    return download_stats
 
 if __name__ == "__main__":
     main()
