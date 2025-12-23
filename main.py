@@ -9,39 +9,44 @@ import downloader_tw
 import downloader_us
 import downloader_hk
 import downloader_cn
-import downloader_jp  # 👈 新增：日本下載器
-import downloader_kr  # 👈 新增：韓國下載器
+import downloader_jp
+import downloader_kr
 import analyzer
 import notifier
 
 def run_market_pipeline(market_id, market_name, emoji):
     """
-    執行單一市場的完整管線：下載 -> 分析 -> 寄信
+    執行單一市場的完整管線：下載 -> 分析 -> 寄信 (含下載統計)
     """
     print("\n" + "="*60)
     print(f"{emoji} 啟動管線：{market_name} ({market_id})")
     print("="*60)
 
+    # 初始化統計變數
+    stats = None
+
     # --- Step 1: 數據獲取 ---
     print(f"【Step 1: 數據獲取】正在更新 {market_name} 原始 K 線資料...")
     try:
+        # 修改點：接收下載模組 main() 回傳的統計字典
         if market_id == "tw-share":
-            downloader_tw.main()
+            stats = downloader_tw.main()
         elif market_id == "us-share":
-            downloader_us.main()
+            stats = downloader_us.main()
         elif market_id == "hk-share":
-            downloader_hk.main()
+            stats = downloader_hk.main()
         elif market_id == "cn-share":
-            downloader_cn.main()
+            stats = downloader_cn.main()
         elif market_id == "jp-share":
-            downloader_jp.main()  # 👈 新增：日本市場下載
+            stats = downloader_jp.main()
         elif market_id == "kr-share":
-            downloader_kr.main()  # 👈 新增：韓國市場下載
+            stats = downloader_kr.main()
         else:
             print(f"⚠️ 未知的市場 ID: {market_id}")
             return
     except Exception as e:
-        print(f"❌ {market_name} 數據下載失敗: {e}")
+        print(f"❌ {market_name} 數據下載過程發生異常: {e}")
+        # 即便下載過程有部分報錯，stats 可能還是有部分數據，視情況續行
 
     # --- Step 2: 數據分析 & 繪圖 ---
     print(f"\n【Step 2: 矩陣分析】正在計算 {market_name} 動能分布並生成圖表...")
@@ -57,11 +62,13 @@ def run_market_pipeline(market_id, market_name, emoji):
 
         # --- Step 3: 報表發送 ---
         print(f"\n【Step 3: 報表發送】正在透過 Resend 傳送郵件...")
+        # 修改點：傳入 stats 參數給 notifier
         notifier.send_stock_report(
             market_name=market_name,
             img_data=img_paths,
             report_df=report_df,
-            text_reports=text_reports
+            text_reports=text_reports,
+            stats=stats  # 👈 將下載家數統計傳入
         )
         print(f"✅ {market_name} 監控報告發送完畢。")
 
@@ -91,19 +98,23 @@ def main():
         "tw-share": {"name": "台灣股市", "emoji": "🇹🇼"},
         "hk-share": {"name": "香港股市", "emoji": "🇭🇰"},
         "cn-share": {"name": "中國股市", "emoji": "🇨🇳"},
-        "jp-share": {"name": "日本股市", "emoji": "🇯🇵"}, # 👈 新增
-        "kr-share": {"name": "韓國股市", "emoji": "🇰🇷"}, # 👈 新增
+        "jp-share": {"name": "日本股市", "emoji": "🇯🇵"},
+        "kr-share": {"name": "韓國股市", "emoji": "🇰🇷"},
         "us-share": {"name": "美國股市", "emoji": "🇺🇸"}
     }
 
     # 3. 執行邏輯
     if args.market == 'all':
+        # 依照配置清單順序跑遍所有市場
         for m_id, m_info in markets_config.items():
             run_market_pipeline(m_id, m_info["name"], m_info["emoji"])
     else:
+        # 只跑指定的單一市場
         m_info = markets_config.get(args.market)
         if m_info:
             run_market_pipeline(args.market, m_info["name"], m_info["emoji"])
+        else:
+            print(f"❌ 找不到市場配置: {args.market}")
 
     # 4. 結算時間
     end_time = time.time()
