@@ -16,7 +16,8 @@ DATA_DIR = os.path.join(BASE_DIR, "data", MARKET_CODE, DATA_SUBDIR)
 LIST_DIR = os.path.join(BASE_DIR, "data", MARKET_CODE, "lists")
 CACHE_LIST_PATH = os.path.join(LIST_DIR, "hk_stock_list_cache.json")
 
-MAX_WORKERS = 4 # 保持保守以防被限流
+# ✅ 效能優化：保持 4 執行緒，配合亂數延遲可避開 Yahoo 封鎖
+MAX_WORKERS = 4 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LIST_DIR, exist_ok=True)
 
@@ -43,13 +44,10 @@ def classify_security(name: str) -> str:
     return "Common Stock"
 
 def get_full_stock_list():
-    """
-    獲取港股清單，具備門檻防呆與多次重試機制
-    """
-    threshold = 2000 # 港股普通股應在 2500 檔左右
+    """獲取港股清單，具備門檻防呆與多次重試機制"""
+    threshold = 2000 
     max_retries = 3
     
-    # 1. 檢查今日快取
     if os.path.exists(CACHE_LIST_PATH):
         try:
             file_mtime = os.path.getmtime(CACHE_LIST_PATH)
@@ -61,7 +59,6 @@ def get_full_stock_list():
                         return data
         except: pass
 
-    # 2. 網路獲取重試迴圈
     log("📡 正在從 HKEX 獲取證券名單...")
     url = "https://www.hkex.com.hk/-/media/HKEX-Market/Services/Trading/Securities/Securities-Lists/Securities-Using-Standard-Transfer-Form-(including-GEM)-By-Stock-Code-Order/secstkorder.xls"
     
@@ -71,7 +68,6 @@ def get_full_stock_list():
             r.raise_for_status()
             df_raw = pd.read_excel(io.BytesIO(r.content), header=None)
             
-            # 定位表頭
             hdr_idx = 0
             for row_i in range(20):
                 row_str = "".join([str(x) for x in df_raw.iloc[row_i]]).lower()
@@ -94,32 +90,25 @@ def get_full_stock_list():
                         res.append(f"{code5}&{name}")
             
             final_list = list(set(res))
-            
             if len(final_list) >= threshold:
                 with open(CACHE_LIST_PATH, "w", encoding="utf-8") as f:
                     json.dump(final_list, f, ensure_ascii=False)
                 log(f"✅ 成功獲取港股清單: {len(final_list)} 檔")
                 return final_list
-            else:
-                log(f"⚠️ 數量不足 ({len(final_list)} 檔)，準備重試...")
         except Exception as e:
             log(f"❌ 嘗試失敗: {e}")
         
         if i < max_retries - 1:
             time.sleep(5)
 
-    # 3. 歷史快取備援
     if os.path.exists(CACHE_LIST_PATH):
         log("🔄 使用歷史快取備援...")
         with open(CACHE_LIST_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
-            
     return []
 
 def download_stock_data(item):
-    """
-    單檔下載：加入隨機延遲
-    """
+    """單檔下載：具備隨機延遲與重試"""
     try:
         code5, name = item.split('&', 1)
         yf_sym = to_symbol_yf(code5)
@@ -128,30 +117,33 @@ def download_stock_data(item):
         if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
             return {"status": "exists", "tkr": code5}
 
-        # 🚀 關鍵隨機等待
-        time.sleep(random.uniform(0.5, 1.2))
+        # 隨機等待縮短至 0.4~1.0 秒以提升效率
+        time.sleep(random.uniform(0.4, 1.0))
         
         tk = yf.Ticker(yf_sym)
-        hist = tk.history(period="2y", timeout=20)
-        
-        if hist is not None and not hist.empty:
-            hist.reset_index(inplace=True)
-            hist.columns = [c.lower() for c in hist.columns]
-            if 'date' in hist.columns:
-                hist['date'] = pd.to_datetime(hist['date'], utc=True).dt.tz_localize(None)
-            
-            hist.to_csv(out_path, index=False, encoding='utf-8-sig')
-            return {"status": "success", "tkr": code5}
+        for attempt in range(2):
+            try:
+                hist = tk.history(period="2y", timeout=20)
+                if hist is not None and not hist.empty:
+                    hist.reset_index(inplace=True)
+                    hist.columns = [c.lower() for c in hist.columns]
+                    if 'date' in hist.columns:
+                        hist['date'] = pd.to_datetime(hist['date'], utc=True).dt.tz_localize(None)
+                    hist.to_csv(out_path, index=False, encoding='utf-8-sig')
+                    return {"status": "success", "tkr": code5}
+            except:
+                time.sleep(random.randint(2, 5))
             
         return {"status": "empty", "tkr": code5}
     except:
         return {"status": "error"}
 
 def main():
+    start_time = time.time()
     items = get_full_stock_list()
     if not items:
         log("❌ 無法取得港股清單，終止執行。")
-        return
+        return {"total": 0, "success": 0, "fail": 0}
     
     log(f"🚀 開始港股下載任務 (共 {len(items)} 檔)")
     stats = {"success": 0, "exists": 0, "empty": 0, "error": 0}
@@ -165,13 +157,32 @@ def main():
             stats[res.get("status", "error")] += 1
             pbar.update(1)
             
-            # 每成功 100 檔額外休息，避免長時間佔用連線
-            if stats["success"] > 0 and stats["success"] % 100 == 0:
-                time.sleep(random.uniform(2, 5))
-                
+            # 每成功 100 檔額外休息
+            if (stats["success"] + stats["exists"]) % 100 == 0:
+                time.sleep(random.uniform(1, 3))
         pbar.close()
+
+    # --- 💡 數據下載統計 (供 Email 通知使用) ---
+    total_expected = len(items)
+    effective_success = stats['success'] + stats['exists']
+    fail_count = stats['error'] + stats['empty']
+
+    download_stats = {
+        "total": total_expected,
+        "success": effective_success,
+        "fail": fail_count
+    }
+
+    duration = (time.time() - start_time) / 60
+    log("="*30)
+    log(f"🏁 港股下載任務完成 (耗時 {duration:.1f} 分鐘)")
+    log(f"   - 應收總數: {total_expected}")
+    log(f"   - 成功(含舊檔): {effective_success}")
+    log(f"   - 失敗/缺失: {fail_count}")
+    log(f"📈 數據完整度: {(effective_success/total_expected)*100:.2f}%")
+    log("="*30)
     
-    log(f"📊 港股下載報告: 成功={stats['success']}, 跳過={stats['exists']}, 失敗={stats['error']}")
+    return download_stats # 🚀 回傳統計字典
 
 if __name__ == "__main__":
     main()
